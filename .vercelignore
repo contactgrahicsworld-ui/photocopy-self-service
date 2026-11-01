@@ -1,0 +1,17 @@
+/.env
+/.env.local
+/.secrets/
+/db/
+/dev.log
+/server.log
+/FINAL_REPORT.md
+/node_modules
+/.next
+/.zscripts/
+/download/
+/upload/
+/examples
+/skills
+/agent/agent.state.json
+/agent/agent.config.json
+/.git
