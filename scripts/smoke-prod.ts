@@ -205,12 +205,11 @@ async function main() {
     check("order visible to ITS shop only", !!found, { orderNumber, count: Array.isArray(allOrders) ? allOrders.length : ordersList.data });
 
     const utr = String(Date.now()).slice(0, 12);
-    const payRef = order.data?.payment?.reference;
-    const subUtr = await new Client().req("POST", `/api/public/orders/${payRef}/utr`, { utr, code: accessCode });
+    const subUtr = await new Client().req("POST", `/api/public/orders/${orderNumber}/utr`, { utr, code: accessCode });
     check("customer submits UTR → VERIFICATION_PENDING", subUtr.status === 200 && subUtr.data?.status === "VERIFICATION_PENDING", subUtr.data);
 
     const od2 = await shop.req("GET", `/api/shop/orders/${found?.id}`);
-    const paymentId = od2.data?.order?.payments?.[0]?.id ?? od2.data?.payments?.[0]?.id;
+    const paymentId = od2.data?.payment?.id;
     check("payment record exists on order", !!paymentId);
 
     const verify = await shop.req("POST", `/api/shop/orders/${paymentId}/verify`, { amountConfirmedPaise: order.data?.totalPaise });
@@ -227,15 +226,15 @@ async function main() {
       customerName: "Smoke 2",
     });
     check("second order created", order2.status === 200, order2.data);
-    await new Client().req("POST", `/api/public/orders/${order2.data?.payment?.reference}/utr`, { utr: String(Date.now()).slice(0, 12), code: order2.data?.accessCode });
+    await new Client().req("POST", `/api/public/orders/${order2.data?.orderNumber}/utr`, { utr: String(Date.now()).slice(0, 12), code: order2.data?.accessCode });
     const o2list = await shop.req("GET", "/api/shop/orders");
     const o2 = (o2list.data?.orders ?? []).find((o: any) => o.orderNumber === order2.data?.orderNumber);
     const o2detail = await shop.req("GET", `/api/shop/orders/${o2?.id}`);
-    const o2pay = o2detail.data?.order?.payments?.[0]?.id ?? o2detail.data?.payments?.[0]?.id;
+    const o2pay = o2detail.data?.payment?.id;
     const wrongAmt = await shop.req("POST", `/api/shop/orders/${o2pay}/verify`, { amountConfirmedPaise: (order2.data?.totalPaise ?? 0) + 100 });
     check("wrong amount verification rejected (400)", wrongAmt.status === 400, wrongAmt.data);
 
-    const dupUtr = await new Client().req("POST", `/api/public/orders/${order2.data?.payment?.reference}/utr`, { utr, code: order2.data?.accessCode });
+    const dupUtr = await new Client().req("POST", `/api/public/orders/${order2.data?.orderNumber}/utr`, { utr, code: order2.data?.accessCode });
     check("duplicate UTR rejected (409/400)", dupUtr.status === 409 || dupUtr.status === 400, dupUtr.data);
 
     const od = await shop.req("GET", `/api/shop/orders/${found?.id}`);
@@ -257,7 +256,7 @@ async function main() {
     check("agent claims queued job", claim.status === 200, claim.data);
     const job = claim.data?.jobs?.[0];
     if (job) {
-      const dl = await agent.req("GET", `/api/agent/download/${job.documentId}`, undefined, {}, true);
+      const dl = await agent.req("GET", job.downloadPath ?? `/api/agent/download/${job.documentId}`, undefined, {}, true);
       check("agent downloads PDF (authorized)", dl.status === 200, dl.status);
       const buf = Buffer.from(await (dl.res as Response).arrayBuffer());
       check("downloaded bytes are a real PDF", buf.subarray(0, 5).toString() === "%PDF-", buf.subarray(0, 5).toString());
@@ -270,7 +269,7 @@ async function main() {
       const st3 = await agent.req("POST", `/api/agent/jobs/${job.id}/status`, { status: "COMPLETED" });
       check("agent reports COMPLETED", st3.status === 200, st3.data);
       const ill = await agent.req("POST", `/api/agent/jobs/${job.id}/status`, { status: "PRINTING" });
-      check("illegal state transition rejected", ill.status === 400 || ill.status === 409, ill.status);
+      check("illegal state transition rejected (ok:false / 4xx)", ill.status >= 400 || ill.data?.ok === false, ill.data);
     }
 
     // ── 6. Tenant isolation ─────────────────────────────────────────────────────

@@ -144,7 +144,9 @@ export function storedPdfPath(shopId: string, storedName: string): string {
 
 export async function readStoredPdf(shopId: string, storedName: string): Promise<Buffer> {
   if (supabaseBackendEnabled()) {
-    const res = await sbFetch(`/authenticated/object/${SUPABASE_BUCKET}/${objectPath(shopId, storedName)}`);
+    // Service-role read: the plain /object endpoint (the /authenticated one is
+    // for end-user JWTs and rejects service keys).
+    const res = await sbFetch(`/object/${SUPABASE_BUCKET}/${objectPath(shopId, storedName)}`);
     if (!res.ok) {
       throw new Error(`Supabase Storage download failed (${res.status})`);
     }
