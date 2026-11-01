@@ -75,3 +75,4 @@ agent/agent.config.json
 examples/
 .vercel/
 *.tsbuildinfo
+/dist/
