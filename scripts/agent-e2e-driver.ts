@@ -18,7 +18,7 @@ async function makePdf(pages) {
   for (let i=0;i<pages;i++) pdf.addPage();
   return Buffer.from(await pdf.save());
 }
-const login = await req("POST", "/api/auth/login", { email: "demo@smartphotocopy.test", password: "Demo@2026" });
+const login = await req("POST", "/api/auth/login", { email: process.env.DEMO_SHOP_EMAIL ?? "", password: process.env.DEMO_SHOP_PASSWORD ?? "" });
 console.log("shop login:", login.status, JSON.stringify(login.data));
 const dev = await req("POST", "/api/shop/devices", { name: "SimAgent E2E" });
 console.log("device:", dev.status, "pairing:", dev.data.pairingCode);

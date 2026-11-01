@@ -1,6 +1,13 @@
 // Private document storage + PDF validation.
-// Files live in db/uploads/{shopId}/ — NEVER inside public/. They are only
-// readable through /api/files/[id] with a short-lived signed token.
+// Two interchangeable backends, same function signatures:
+//  - "local"    — files under FILE_STORAGE_DIR/{shopId}/ (sandbox / self-hosted)
+//  - "supabase" — Supabase Storage private bucket (Vercel / serverless; the
+//                 filesystem there is ephemeral, so PDFs must live in object
+//                 storage). Objects are keyed {shopId}/{storedName} and are
+//                 NEVER public: reads always flow through our authenticated
+//                 API routes with the service key.
+// Files are only readable through /api/files/[id] with a short-lived signed
+// token, or by the print agent with a device-token-authorized download URL.
 
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -8,7 +15,38 @@ import path from "node:path";
 import { PDFDocument } from "pdf-lib";
 import { MAX_UPLOAD_MB, MAX_FILES_PER_ORDER } from "./types";
 
+const STORAGE_BACKEND = (process.env.STORAGE_BACKEND || "local").toLowerCase();
 const STORAGE_ROOT = process.env.FILE_STORAGE_DIR || path.join(process.cwd(), "db", "uploads");
+
+const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const SUPABASE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || "documents";
+
+function supabaseBackendEnabled(): boolean {
+  if (STORAGE_BACKEND !== "supabase") return false;
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    console.error("[storage] STORAGE_BACKEND=supabase but SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY missing — falling back to local");
+    return false;
+  }
+  return true;
+}
+
+function objectPath(shopId: string, storedName: string): string {
+  // Both segments are basename-validated: blocks any ../ traversal.
+  return `${path.basename(shopId)}/${path.basename(storedName)}`;
+}
+
+async function sbFetch(pathname: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(`${SUPABASE_URL}/storage/v1${pathname}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      ...(init?.headers || {}),
+    },
+  });
+  return res;
+}
 
 export interface PdfValidationResult {
   ok: boolean;
@@ -74,27 +112,62 @@ export async function validatePdfUpload(file: File): Promise<PdfValidationResult
   };
 }
 
-/** Persist a validated PDF inside the tenant's private directory. */
+/** Persist a validated PDF inside the tenant's private directory/object prefix. */
 export async function storePdf(shopId: string, buffer: Buffer, originalName: string): Promise<string> {
-  const dir = path.join(STORAGE_ROOT, shopId);
-  await fs.mkdir(dir, { recursive: true });
   const safeExt = originalName.toLowerCase().endsWith(".pdf") ? ".pdf" : ".pdf";
   const storedName = `${Date.now()}-${crypto.randomBytes(8).toString("hex")}${safeExt}`;
+
+  if (supabaseBackendEnabled()) {
+    const res = await sbFetch(`/object/${SUPABASE_BUCKET}/${objectPath(shopId, storedName)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/pdf", "x-upsert": "false" },
+      body: new Uint8Array(buffer),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`Supabase Storage upload failed (${res.status}): ${detail.slice(0, 200)}`);
+    }
+    return storedName;
+  }
+
+  const dir = path.join(STORAGE_ROOT, shopId);
+  await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, storedName), buffer);
   return storedName;
 }
 
-/** Resolve the absolute path of a stored document (validated against traversal). */
+/** Resolve the local absolute path of a stored document (local backend only). */
 export function storedPdfPath(shopId: string, storedName: string): string {
   const safe = path.basename(storedName); // blocks ../ traversal
   return path.join(STORAGE_ROOT, path.basename(shopId), safe);
 }
 
 export async function readStoredPdf(shopId: string, storedName: string): Promise<Buffer> {
+  if (supabaseBackendEnabled()) {
+    const res = await sbFetch(`/authenticated/object/${SUPABASE_BUCKET}/${objectPath(shopId, storedName)}`);
+    if (!res.ok) {
+      throw new Error(`Supabase Storage download failed (${res.status})`);
+    }
+    return Buffer.from(await res.arrayBuffer());
+  }
   return fs.readFile(storedPdfPath(shopId, storedName));
 }
 
 export async function storageUsageBytes(shopId: string): Promise<number> {
+  if (supabaseBackendEnabled()) {
+    try {
+      const res = await sbFetch(`/object/list/${SUPABASE_BUCKET}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prefix: `${path.basename(shopId)}/`, limit: 10000 }),
+      });
+      if (!res.ok) return 0;
+      const items = (await res.json()) as Array<{ metadata?: { size?: number } }>;
+      return items.reduce((acc, it) => acc + (it.metadata?.size ?? 0), 0);
+    } catch {
+      return 0;
+    }
+  }
   try {
     const dir = path.join(STORAGE_ROOT, shopId);
     const files = await fs.readdir(dir);
@@ -107,6 +180,23 @@ export async function storageUsageBytes(shopId: string): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+/** Delete a tenant's stored object (used when purging rejected/expired docs). */
+export async function deleteStoredPdf(shopId: string, storedName: string): Promise<void> {
+  if (supabaseBackendEnabled()) {
+    await sbFetch(`/object/${SUPABASE_BUCKET}/${objectPath(shopId, storedName)}`, { method: "DELETE" }).catch(() => {});
+    return;
+  }
+  try {
+    await fs.unlink(storedPdfPath(shopId, storedName));
+  } catch {
+    /* already gone */
+  }
+}
+
+export function storageBackendName(): string {
+  return supabaseBackendEnabled() ? "supabase" : "local";
 }
 
 export function maxFilesPerOrder(): number {

@@ -13,6 +13,9 @@ import { PDFDocument } from "pdf-lib";
 import { PrismaClient } from "@prisma/client";
 
 const BASE = process.env.TEST_BASE_URL ?? "http://localhost:3000";
+// Local dev credentials come from the environment (.env) — nothing hardcoded.
+const DEV_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL ?? "";
+const DEV_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD ?? "";
 const db = new PrismaClient();
 
 // ── minimal cookie-jar HTTP client ───────────────────────────────────────────
@@ -123,7 +126,7 @@ afterAll(async () => {
 // ══════════════════════════ 1. AUTHENTICATION ═══════════════════════════════
 describe("1. authentication & provisioning", () => {
   test("super admin login works (seeded account)", async () => {
-    const r = await superA.login("owner@smartphotocopy.test", "ChangeMe!2026");
+    const r = await superA.login(DEV_ADMIN_EMAIL, DEV_ADMIN_PASSWORD);
     expect(r.status).toBe(200);
     expect(r.data.role).toBe("SUPER_ADMIN");
     expect(r.data.redirect).toBe("/admin");
@@ -131,7 +134,7 @@ describe("1. authentication & provisioning", () => {
 
   test("wrong password rejected with 401, no role leakage", async () => {
     const c = new Client();
-    const r = await c.login("owner@smartphotocopy.test", "wrong-password");
+    const r = await c.login(DEV_ADMIN_EMAIL, "wrong-password");
     expect(r.status).toBe(401);
     expect(r.data.error).toBe("Invalid email or password");
   });

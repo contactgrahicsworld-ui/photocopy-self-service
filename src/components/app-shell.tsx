@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Printer, LogOut, Menu, X, LayoutDashboard, ClipboardList, IndianRupee, Settings, BarChart3, CreditCard, FileText, QrCode, Landmark, Store, ScrollText, BadgeIndianRupee } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ChangePasswordDialog } from "@/components/change-password-dialog";
 
 // Nav defined CLIENT-SIDE: React components (icons) must not cross the
 // server→client boundary. Layouts only pass a navKey.
@@ -100,6 +101,7 @@ export function AppShell({
               <div className="text-sm font-medium leading-tight truncate max-w-[200px]">{me?.name ?? "…"}</div>
               <div className="text-xs text-muted-foreground leading-tight">{me?.email}</div>
             </div>
+            <ChangePasswordDialog />
             <Button variant="ghost" size="icon" aria-label="Sign out" onClick={logout}>
               <LogOut className="h-4 w-4" />
             </Button>

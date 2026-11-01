@@ -1,10 +1,26 @@
 import Link from "next/link";
-import { Printer, QrCode, ShieldCheck, Smartphone, IndianRupee, Store, Building2 } from "lucide-react";
+import { db } from "@/lib/db";
+import { Printer, QrCode, ShieldCheck, Smartphone, IndianRupee, Store, Building2, Rocket } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+
+async function platformState() {
+  try {
+    const [superAdmins, demoShop] = await Promise.all([
+      db.user.count({ where: { role: "SUPER_ADMIN" } }),
+      db.shop.findFirst({ where: { slug: "demo-shop", status: "ACTIVE" }, select: { id: true } }),
+    ]);
+    return { setupNeeded: superAdmins === 0, demoShopExists: !!demoShop };
+  } catch {
+    return { setupNeeded: false, demoShopExists: false };
+  }
+}
+
+export default async function Home() {
+  const { setupNeeded, demoShopExists } = await platformState();
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-slate-50 to-white">
       <header className="border-b bg-white/80 backdrop-blur sticky top-0 z-10">
@@ -25,6 +41,15 @@ export default function Home() {
       </header>
 
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-10">
+        {setupNeeded && (
+          <section className="mb-8 rounded-xl border border-emerald-200 bg-emerald-50 p-5 flex flex-col sm:flex-row sm:items-center gap-4 justify-between">
+            <div>
+              <p className="font-semibold flex items-center gap-2"><Rocket className="h-4 w-4 text-emerald-700" /> First-time setup pending</p>
+              <p className="text-sm text-muted-foreground">This deployment has no platform owner yet. Complete one-time setup with your SETUP_TOKEN to start onboarding shops.</p>
+            </div>
+            <Link href="/setup"><Button className="bg-emerald-600 hover:bg-emerald-700 text-white">Open setup →</Button></Link>
+          </section>
+        )}
         <section className="text-center mb-12">
           <Badge variant="outline" className="mb-4 border-emerald-200 text-emerald-700 bg-emerald-50">
             <IndianRupee className="h-3 w-3 mr-1" /> Direct UPI payments · No gateway
@@ -77,16 +102,26 @@ export default function Home() {
               <CardContent><Button variant="outline" size="sm">Admin sign in →</Button></CardContent>
             </Card>
           </Link>
-          <Link href="/s/demo-shop" className="block">
-            <Card className="h-full hover:border-emerald-400 transition-colors">
+          {demoShopExists ? (
+            <Link href="/s/demo-shop" className="block">
+              <Card className="h-full hover:border-emerald-400 transition-colors">
+                <CardHeader className="pb-2">
+                  <QrCode className="h-6 w-6 text-emerald-600 mb-2" />
+                  <CardTitle className="text-lg">Customer demo</CardTitle>
+                  <CardDescription>Try the mobile ordering flow on the demo shop (labelled DEMO data).</CardDescription>
+                </CardHeader>
+                <CardContent><Button variant="outline" size="sm">Open demo shop →</Button></CardContent>
+              </Card>
+            </Link>
+          ) : (
+            <Card className="h-full">
               <CardHeader className="pb-2">
                 <QrCode className="h-6 w-6 text-emerald-600 mb-2" />
-                <CardTitle className="text-lg">Customer demo</CardTitle>
-                <CardDescription>Try the mobile ordering flow on the demo shop (labelled DEMO data).</CardDescription>
+                <CardTitle className="text-lg">Customers</CardTitle>
+                <CardDescription>No app needed — customers scan the shop&apos;s counter QR and order in the mobile browser. Each shop gets its own QR.</CardDescription>
               </CardHeader>
-              <CardContent><Button variant="outline" size="sm">Open demo shop →</Button></CardContent>
             </Card>
-          </Link>
+          )}
         </section>
 
         <section className="rounded-xl border bg-slate-50 p-6 text-sm text-muted-foreground">

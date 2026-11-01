@@ -1,6 +1,8 @@
-// SMART PHOTOCOPY — provisioning & demo seed.
-// Creates: super admin (from env), subscription plans, demo shop (clearly
-// labelled DEMO), demo pricing/printers, platform UPI placeholder.
+// SMART PHOTOCOPY — provisioning seed.
+// ALWAYS: subscription plans + platform settings placeholders.
+// DEV ONLY (never on a production deployment): demo super admin + demo shop.
+// The production path for the first Super Admin is the one-time /setup flow —
+// no predefined credentials exist in this system.
 //
 // Run: bun scripts/seed.ts
 
@@ -8,6 +10,9 @@ import { PrismaClient } from "@prisma/client";
 import crypto from "node:crypto";
 
 const db = new PrismaClient();
+
+const IS_PROD = process.env.NODE_ENV === "production" || process.env.VERCEL === "1";
+const ALLOW_DEMO = process.env.FORCE_DEMO_SEED === "1";
 
 function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16);
@@ -18,9 +23,18 @@ function hashPassword(password: string): string {
 async function main() {
   console.log("── Smart Photocopy provisioning ──");
 
-  // 1. Super Admin (no public registration)
-  const email = (process.env.SUPER_ADMIN_EMAIL || "owner@smartphotocopy.test").toLowerCase();
-  const password = process.env.SUPER_ADMIN_PASSWORD || "ChangeMe!2026";
+  // 1. Super Admin (DEV ONLY — production uses the one-time /setup flow)
+  if (IS_PROD && !ALLOW_DEMO) {
+    console.log("↷ Production deployment: skipping demo super admin & demo shop.");
+    console.log("  First owner account is created once at /setup with SETUP_TOKEN.");
+  } else {
+  // Dev/demo environments: credentials MUST come from the environment.
+  // No hardcoded fallback — run the /setup flow instead on production.
+  const email = process.env.SUPER_ADMIN_EMAIL?.toLowerCase();
+  const password = process.env.SUPER_ADMIN_PASSWORD;
+  if (!email || !password) {
+    console.log("↷ SUPER_ADMIN_EMAIL/SUPER_ADMIN_PASSWORD not set — skipping super admin creation (use /setup flow).");
+  } else {
   const superAdmin = await db.user.upsert({
     where: { email },
     update: { role: "SUPER_ADMIN", isActive: true },
@@ -31,7 +45,9 @@ async function main() {
       passwordHash: hashPassword(password),
     },
   });
-  console.log(`✔ Super Admin: ${email}  ${process.env.SUPER_ADMIN_PASSWORD ? "" : "(default password ChangeMe!2026 — change immediately)"}`);
+  console.log(`✔ Super Admin: ${email}`);
+  } // end env-required check
+  } // end dev-only super admin
 
   // 2. Subscription plans
   const plans = [
@@ -66,8 +82,22 @@ async function main() {
   });
   console.log("✔ Platform settings (configure your real UPI ID in Super Admin → Settings)");
 
-  // 4. DEMO shop — labelled demo data, not production data
+  if (IS_PROD && !ALLOW_DEMO) {
+    console.log("✔ Done (production mode — plans + settings only, no demo data)");
+    await db.$disconnect();
+    return;
+  }
+
+  // 4. DEMO shop — labelled demo data, DEV/DEMO ENVIRONMENTS ONLY.
+  // Demo credentials also come from the environment; nothing is hardcoded.
   const demoSlug = "demo-shop";
+  const demoEmail = process.env.DEMO_SHOP_EMAIL?.toLowerCase();
+  const demoPassword = process.env.DEMO_SHOP_PASSWORD;
+  if (!demoEmail || !demoPassword) {
+    console.log("↷ DEMO_SHOP_EMAIL/DEMO_SHOP_PASSWORD not set — skipping demo shop creation.");
+    await db.$disconnect();
+    return;
+  }
   let shop = await db.shop.findUnique({ where: { slug: demoSlug } });
   if (!shop) {
     shop = await db.shop.create({
@@ -86,14 +116,14 @@ async function main() {
       },
     });
     await db.user.upsert({
-      where: { email: "demo@smartphotocopy.test" },
+      where: { email: demoEmail },
       update: { shopId: shop.id, role: "SHOP_ADMIN" },
       create: {
-        email: "demo@smartphotocopy.test",
+        email: demoEmail,
         name: "Demo Shop Admin",
         role: "SHOP_ADMIN",
         shopId: shop.id,
-        passwordHash: hashPassword("Demo@2026"),
+        passwordHash: hashPassword(demoPassword),
       },
     });
     const rules = [
@@ -118,7 +148,7 @@ async function main() {
     await db.subscription.create({
       data: { shopId: shop.id, planId: trial!.id, startsAt: new Date(), expiresAt: new Date(Date.now() + 7 * 86400000), status: "ACTIVE" },
     });
-    console.log(`✔ DEMO shop: /s/${demoSlug}  (admin demo@smartphotocopy.test / Demo@2026)`);
+    console.log(`✔ DEMO shop: /s/${demoSlug}  (admin ${demoEmail})`);
   } else {
     console.log("• DEMO shop already exists");
   }

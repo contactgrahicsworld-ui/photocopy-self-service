@@ -1,0 +1,413 @@
+// SMART PHOTOCOPY — Multi-tenant SaaS schema
+// SQLite for the pilot deployment. Every shop-owned row carries shopId (tenant_id).
+// PostgreSQL + Row Level Security is the production scale-up path; the schema is
+// designed so tenant_id columns map 1:1 to RLS policies.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users & roles ────────────────────────────────────────────────────────────
+// role: SUPER_ADMIN | SHOP_ADMIN  (customers are anonymous, no login required)
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String?
+  role         String // SUPER_ADMIN | SHOP_ADMIN
+  shopId       String?
+  shop         Shop?     @relation(fields: [shopId], references: [id])
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  verifiedPayments Payment[] @relation("PaymentVerifier")
+}
+
+// ─── Shops (tenants) ──────────────────────────────────────────────────────────
+model Shop {
+  id                   String    @id @default(cuid())
+  slug                 String    @unique // used in QR URL /s/{slug}
+  name                 String
+  ownerName            String?
+  phone                String?
+  address              String?
+  businessHours        String?
+  logoUrl              String?
+  status               String    @default("ACTIVE") // ACTIVE | SUSPENDED | ARCHIVED
+  upiId                String? // shop's own UPI VPA for customer payments
+  upiPayeeName         String?
+  taxPercent           Float     @default(0)
+  additionalChargePaise Int      @default(0)
+  additionalChargeLabel String?
+  orderCounter         Int       @default(0) // per-shop sequential order numbers
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  users            User[]
+  subscriptions    Subscription[]
+  payments         Payment[]
+  pricingRules     PricingRule[]
+  pricingVersions  PricingVersion[]
+  printers         Printer[]
+  devices          PrintDevice[]
+  documents        Document[]
+  customers        Customer[]
+  orders           Order[]
+  printJobs        PrintJob[]
+  auditLogs        AuditLog[]
+  notifications    Notification[]
+}
+
+// ─── Subscriptions ────────────────────────────────────────────────────────────
+model SubscriptionPlan {
+  id                String   @id @default(cuid())
+  code              String   @unique // TRIAL | M3 | M6 | Y1 | LIFETIME
+  name              String
+  pricePaise        Int
+  durationDays      Int? // null => lifetime, never expires
+  printerLimit      Int? // null = unlimited
+  storageLimitMb    Int?
+  monthlyOrderLimit Int?
+  features          String? // JSON array of feature strings
+  sortOrder         Int      @default(0)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  subscriptions Subscription[]
+  payments      Payment[]
+}
+
+model Subscription {
+  id        String    @id @default(cuid())
+  shopId    String
+  shop      Shop      @relation(fields: [shopId], references: [id])
+  planId    String
+  plan      SubscriptionPlan @relation(fields: [planId], references: [id])
+  startsAt  DateTime  @default(now())
+  expiresAt DateTime? // null + isLifetime => never expires
+  isLifetime Boolean  @default(false)
+  status    String    @default("ACTIVE") // ACTIVE | EXPIRED | CANCELLED
+  createdAt DateTime  @default(now())
+
+  @@index([shopId, status])
+}
+
+// ─── Payments (unified: subscription + print orders) ─────────────────────────
+// states: CREATED, PAYMENT_PENDING, VERIFICATION_PENDING, VERIFIED, REJECTED,
+//         EXPIRED, REFUND_PENDING, REFUNDED
+model Payment {
+  id               String    @id @default(cuid())
+  type             String // SUBSCRIPTION | PRINT_ORDER
+  shopId           String
+  shop             Shop      @relation(fields: [shopId], references: [id])
+  orderId          String?
+  order            Order?    @relation(fields: [orderId], references: [id])
+  planId           String?
+  plan             SubscriptionPlan? @relation(fields: [planId], references: [id])
+  reference        String    @unique // unique payment reference printed in QR note
+  amountPaise      Int // expected exact amount
+  payeeUpiId       String // snapshot: who receives the money
+  payeeName        String // snapshot
+  upiUri           String // snapshot of generated URI
+  utr              String? // customer/shop-submitted transaction reference
+  status           String    @default("CREATED")
+  utrSubmittedAt   DateTime?
+  verifiedByUserId String?
+  verifiedBy       User?     @relation("PaymentVerifier", fields: [verifiedByUserId], references: [id])
+  verifiedAt       DateTime?
+  rejectionReason  String?
+  expiresAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  refunds Refund[]
+
+  @@unique([utr, payeeUpiId]) // duplicate UTR to the same payee is impossible
+  @@index([shopId, type, status])
+}
+
+model Refund {
+  id          String   @id @default(cuid())
+  paymentId   String
+  payment     Payment  @relation(fields: [paymentId], references: [id])
+  shopId      String
+  amountPaise Int
+  reason      String?
+  status      String   @default("REFUND_PENDING") // REFUND_PENDING | REFUNDED
+  createdAt   DateTime @default(now())
+  resolvedAt  DateTime?
+
+  @@index([shopId])
+}
+
+// ─── Pricing ──────────────────────────────────────────────────────────────────
+model PricingRule {
+  id                    String  @id @default(cuid())
+  shopId                String
+  shop                  Shop    @relation(fields: [shopId], references: [id])
+  paperSize             String // A4 | A3 | LEGAL | PHOTO_4X6 | CUSTOM:{name}
+  colorMode             String // BW | COLOR
+  pricePerSidePaise     Int
+  duplexPricePerSidePaise Int? // optional cheaper duplex rate per printed side
+  active                Boolean @default(true)
+
+  @@unique([shopId, paperSize, colorMode])
+}
+
+// Immutable snapshot taken when an order is confirmed — rate changes later
+// never rewrite historical prices.
+model PricingVersion {
+  id              String   @id @default(cuid())
+  shopId          String
+  shop            Shop     @relation(fields: [shopId], references: [id])
+  version         Int
+  snapshot        String // JSON of all rules at that moment
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  @@index([shopId, version])
+}
+
+// ─── Printers & agent devices ─────────────────────────────────────────────────
+model Printer {
+  id            String   @id @default(cuid())
+  shopId        String
+  shop          Shop     @relation(fields: [shopId], references: [id])
+  name          String // must match the Windows printer name
+  colorMode     String   @default("BW") // BW | COLOR | ANY
+  paperSizes    String   @default("[\"A4\"]") // JSON array
+  duplexCapable Boolean  @default(false)
+  isDefault     Boolean  @default(false)
+  status        String   @default("ACTIVE") // ACTIVE | OFFLINE | RETIRED
+  lastStatusAt  DateTime?
+  createdAt     DateTime @default(now())
+
+  printJobs PrintJob[]
+
+  @@index([shopId, status])
+}
+
+model PrintDevice {
+  id           String    @id @default(cuid())
+  shopId       String
+  shop         Shop      @relation(fields: [shopId], references: [id])
+  name         String
+  platform     String?
+  tokenHash    String?   @unique // sha256 of device token (token shown once at pairing)
+  pairingCode  String?   @unique // one-time, 15 min validity
+  pairingExpiresAt DateTime?
+  status       String    @default("PENDING") // PENDING | ACTIVE | REVOKED
+  lastSeenAt   DateTime?
+  lastIp       String?
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([shopId, status])
+}
+
+// ─── Customers (anonymous, optional identity) ────────────────────────────────
+model Customer {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id])
+  name      String?
+  phone     String?
+  createdAt DateTime @default(now())
+
+  orders Order[]
+
+  @@index([shopId, phone])
+}
+
+// ─── Documents (private storage; never publicly served) ──────────────────────
+model Document {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id])
+  orderId     String?
+  originalName String
+  storedName  String   @unique // db/uploads/{shopId}/{storedName}
+  mimeType    String
+  sizeBytes   Int
+  pageCount   Int
+  checksum    String
+  scanStatus  String   @default("OK") // OK | REJECTED
+  scanError   String?
+  createdAt   DateTime @default(now())
+
+  order      Order?       @relation(fields: [orderId], references: [id])
+  orderItems OrderItem[]
+  printJobs  PrintJob[]
+
+  @@index([shopId])
+  @@index([orderId])
+}
+
+// ─── Orders ───────────────────────────────────────────────────────────────────
+// states: PAYMENT_PENDING, VERIFICATION_PENDING, PAID, QUEUED, SPOOLING,
+//         PRINTING, COMPLETED, FAILED, CANCELLED, REFUNDED
+model Order {
+  id             String    @id @default(cuid())
+  shopId         String
+  shop           Shop      @relation(fields: [shopId], references: [id])
+  orderNumber    String // per-shop sequential, e.g. "SPB-000123"
+  accessCode     String // required together with orderNumber for public status
+  customerId     String?
+  customer       Customer? @relation(fields: [customerId], references: [id])
+  customerName   String?
+  customerPhone  String?
+  status         String    @default("PAYMENT_PENDING")
+  subtotalPaise  Int
+  additionalPaise Int      @default(0)
+  taxPaise       Int       @default(0)
+  totalPaise     Int
+  pricingVersionId String?
+  pricingSnapshot String // JSON snapshot of rates used
+  paidAt         DateTime?
+  queuedAt       DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  items      OrderItem[]
+  events     OrderEvent[]
+  payments   Payment[]
+  printJobs  PrintJob[]
+  documents  Document[]
+
+  @@unique([shopId, orderNumber])
+  @@index([shopId, status, createdAt])
+}
+
+model OrderItem {
+  id           String  @id @default(cuid())
+  orderId      String
+  order        Order   @relation(fields: [orderId], references: [id])
+  shopId       String // denormalized tenant id for safe direct queries
+  documentId   String
+  document     Document @relation(fields: [documentId], references: [id])
+  fileName     String
+  pageCount    Int
+  pageSelection String? // e.g. "1-3,5,8-10" (null = all)
+  selectedPages Int
+  copies       Int     @default(1)
+  paperSize    String
+  colorMode    String
+  duplex       Boolean @default(false)
+  fitToPage    Boolean @default(true)
+  sides        Int // total printed sides
+  sheets       Int // physical sheets (duplex-aware)
+  lineTotalPaise Int
+  priceSnapshot String // JSON: rate, tax, breakdown
+
+  printJobs PrintJob[]
+
+  @@index([shopId])
+  @@index([orderId])
+}
+
+model OrderEvent {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id])
+  shopId    String
+  status    String
+  note      String?
+  actorType String   @default("SYSTEM") // CUSTOMER | SHOP_ADMIN | SUPER_ADMIN | SYSTEM | AGENT
+  actorId   String?
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+}
+
+// ─── Print jobs ───────────────────────────────────────────────────────────────
+// states: QUEUED, DISPATCHED, SPOOLING, SPOOLER_ACCEPTED, PRINTING, COMPLETED,
+//         FAILED, CANCELLED  (Windows spooler acceptance ≠ physical output)
+model PrintJob {
+  id             String    @id @default(cuid())
+  shopId         String
+  shop           Shop      @relation(fields: [shopId], references: [id])
+  orderId        String
+  order          Order     @relation(fields: [orderId], references: [id])
+  orderItemId    String
+  orderItem      OrderItem @relation(fields: [orderItemId], references: [id])
+  documentId     String
+  document       Document  @relation(fields: [documentId], references: [id])
+  printerId      String?
+  printer        Printer?  @relation(fields: [printerId], references: [id])
+  deviceId       String?
+  printerName    String? // snapshot at dispatch
+  status         String    @default("QUEUED")
+  idempotencyKey String    @unique
+  attempt        Int       @default(0)
+  attemptsMax    Int       @default(3)
+  lastError      String?
+  dispatchedAt   DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  events PrintJobEvent[]
+
+  @@index([shopId, status])
+  @@index([orderId])
+}
+
+model PrintJobEvent {
+  id          String   @id @default(cuid())
+  printJobId  String
+  printJob    PrintJob @relation(fields: [printJobId], references: [id])
+  shopId      String
+  status      String
+  message     String?
+  actorType   String   @default("AGENT")
+  createdAt   DateTime @default(now())
+
+  @@index([printJobId])
+}
+
+// ─── Platform ─────────────────────────────────────────────────────────────────
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorType  String // SUPER_ADMIN | SHOP_ADMIN | CUSTOMER | SYSTEM | AGENT
+  actorId    String?
+  actorLabel String?
+  shopId     String?
+  shop       Shop?    @relation(fields: [shopId], references: [id])
+  action     String
+  entityType String?
+  entityId   String?
+  meta       String? // JSON
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([shopId, createdAt])
+  @@index([action])
+}
+
+model PlatformSetting {
+  key       String   @id
+  value     String // JSON
+  updatedAt DateTime @updatedAt
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  shopId    String?
+  shop      Shop?     @relation(fields: [shopId], references: [id])
+  audience  String // SUPER_ADMIN | SHOP_ADMIN
+  title     String
+  body      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([audience, shopId, readAt])
+}

@@ -52,3 +52,26 @@ prompt
 server.log
 # Skills directory
 /skills/
+# deployment secrets (never commit)
+.secrets/
+.env
+.env.*
+dev.log
+server.log
+db/
+node_modules/
+.next/
+.zscripts/
+download/
+upload/
+FINAL_REPORT.md
+agent/agent.state.json
+agent/agent.config.json
+*.log
+
+
+# env template must be committed
+!.env.example
+examples/
+.vercel/
+*.tsbuildinfo

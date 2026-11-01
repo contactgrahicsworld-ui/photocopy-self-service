@@ -5,127 +5,120 @@ PDFs, pick print options, pay **directly to the shop's UPI ID** (no payment
 gateway), and the shop releases verified orders to an automatic Windows print queue.
 
 - **Roles:** Super Admin (platform owner) · Shop Admin (tenant) · Customer (anonymous, no login)
-- **Stack:** Next.js 16 (App Router) + TypeScript · Prisma + SQLite (pilot) · Tailwind 4 + shadcn/ui · bun
+- **Stack:** Next.js 16 (App Router) + TypeScript · Prisma (SQLite dev / PostgreSQL prod) · Tailwind 4 + shadcn/ui
+- **Storage:** local disk (dev) or **Supabase Storage** private bucket (production/serverless)
 - **Money:** ₹ (integer paise everywhere) · Times: Asia/Kolkata · UPI deep-link QRs
+- **Security:** scrypt password hashing, HMAC-signed session/file/device tokens, per-tenant scoping from the signed session only, audit log, rate limiting, duplicate-UTR prevention
+
+> **No predefined credentials exist anywhere in this system.** The first platform
+> owner is created once at `/setup` using the server's `SETUP_TOKEN`.
 
 ---
 
-## 1. Quick start (this sandbox / local dev)
+## 1. Local development
 
 ```bash
 bun install
-cp .env.example .env            # then edit values (see §6)
-bun run db:push                 # create schema
-bun scripts/seed.ts             # provision super admin, plans, DEMO shop
-bun run dev                     # http://localhost:3000
+cp .env.example .env          # fill values (see §5) — nothing has defaults that work in prod
+bun run db:push               # create SQLite schema
+bun scripts/seed.ts           # plans + platform settings; demo data ONLY if demo env vars are set
+bun run dev                   # http://localhost:3000
 ```
 
-Default provisioned accounts (change immediately in any real deployment):
+First run: open `/setup`, enter `SETUP_TOKEN`, create the Platform Owner account,
+sign in at `/login`, set your real UPI ID under Admin → Settings, create a shop.
 
-| Role | Credentials | Where |
-|---|---|---|
-| Super Admin | `owner@smartphotocopy.test` / `ChangeMe!2026` | `/login` → `/admin` |
-| Demo Shop Admin | `demo@smartphotocopy.test` / `Demo@2026` | `/login` → `/shop` |
-| Demo customer QR | no login | `/s/demo-shop` |
+## 2. Production deployment (Vercel + Supabase)
 
-> The demo shop, its UPI VPA (`demoshop@upi`) and orders are **labelled demo data** — not production data.
+Why: Vercel's filesystem is ephemeral, so production uses **Supabase Postgres**
+(schema `smartphoto`) + **Supabase Storage** (private `documents` bucket).
 
-### Creating the real Super Admin (no public registration exists)
+1. **Database** — create the Postgres schema:
+
+   ```bash
+   export DATABASE_URL="postgresql://<user>.<ref>:<pass>@aws-0-<region>.pooler.supabase.com:5432/postgres?schema=smartphoto&sslmode=require"
+   bunx prisma db push --schema prisma/schema.postgres.prisma --skip-generate
+   bun scripts/seed.ts   # seeds plans + settings only (production mode)
+   ```
+
+2. **Storage** — create a private bucket (once):
+
+   ```bash
+   curl -X POST "https://<ref>.supabase.co/storage/v1/bucket" \
+     -H "Authorization: Bearer <service_role_key>" -H "apikey: <service_role_key>" \
+     -H "Content-Type: application/json" \
+     -d '{"id":"documents","name":"documents","public":false,"file_size_limit":20971520}'
+   ```
+
+3. **Vercel** — set environment variables (Production + Preview):
+
+   | Variable | Value |
+   |---|---|
+   | `DATABASE_URL` | Supabase **transaction pooler** URL (`:6543/postgres?schema=smartphoto&sslmode=require&pgbouncer=true&connection_limit=1`) |
+   | `SESSION_SECRET` | `openssl rand -hex 32` |
+   | `CRON_SECRET` | `openssl rand -hex 16` (Vercel Cron sends it as Bearer automatically) |
+   | `SETUP_TOKEN` | `openssl rand -hex 16` — one-time owner creation at `/setup` |
+   | `STORAGE_BACKEND` | `supabase` |
+   | `SUPABASE_URL` | `https://<ref>.supabase.co` |
+   | `SUPABASE_SERVICE_ROLE_KEY` | service_role key (server-only secret) |
+   | `SUPABASE_STORAGE_BUCKET` | `documents` |
+   | `MAX_UPLOAD_MB` | `20` |
+   | `BASE_URL` | `https://your-domain` |
+
+   Deploy: `vercel --prod`. `vercel.json` builds with the Postgres Prisma schema
+   and registers the hourly `/api/cron/sweep` (expires stale payments/subscriptions).
+
+4. **First login** — open `https://your-domain/setup`, enter `SETUP_TOKEN`,
+   create the owner account. The setup page closes itself permanently afterwards.
+
+## 3. Windows print agent
+
+See **`agent/README.md`**. Summary:
+
+1. Shop Dashboard → *Printers & devices* → add printers (exact Windows names) → create device pairing code.
+2. On the shop's Windows PC run `SmartPhotocopyAgent-Setup.exe` (GitHub Releases) or `node agent.js --pair <CODE>`.
+3. Printing uses SumatraPDF (portable, included path configurable). The agent polls outbound HTTPS only, prints with colour/duplex/copies/page-ranges, reports honest spooler states and never re-prints a job after a crash (local idempotency state).
+4. Run as a service with NSSM (guide in the agent README) or use the installer's auto-start option.
+
+The agent has zero npm dependencies (Node built-ins only) and ships as a single
+cross-compiled `.exe` — no Node.js installation required on the shop PC.
+
+## 4. Testing
 
 ```bash
-SUPER_ADMIN_EMAIL=you@yourdomain.com SUPER_ADMIN_PASSWORD='strong-passphrase' bun scripts/create-superadmin.ts
+bun test tests/auth.test.ts tests/pricing.test.ts   # unit: hashing, tokens, PDF validation, pricing math
+bun test tests/e2e.test.ts                          # integration: auth, tenant isolation, ordering, UPI/UTR, queue, agent (needs dev server running)
+bun scripts/agent-e2e-driver.ts                     # print-agent simulator against the live server
 ```
 
-## 2. The full order lifecycle
+Hardware behaviour (Windows spooler, real printers) is verified with the
+checklist in `agent/README.md` — it cannot be tested from Linux.
 
-1. Shop admin sets **Shop settings** (name, address, hours, **their own UPI ID + payee name**) and **Pricing** (per paper-size × colour, optional duplex rate, flat charges, GST %).
-2. Shop admin downloads the **Shop QR** (PNG) and displays it at the counter.
-3. Customer scans → `/s/{shop-slug}` → uploads PDFs (validated: extension, MIME, `%PDF-` signature, structural integrity, encryption, page count, size cap).
-4. Per-document settings: paper size, B/W or colour, copies, page ranges, duplex. **Price is calculated server-side only** (client value is display-only).
-5. Order created → shop-specific **UPI QR** with the exact amount + unique payment reference.
-6. Customer pays in any UPI app, submits the **UTR**.
-7. Shop admin checks their own bank/UPI app → confirms the **exact credited amount**.
-8. Order is automatically released to the print queue; print jobs are routed (colour/paper/duplex-capability) and claimed by the shop's Windows agent.
-9. Agent downloads via short-lived signed URL, prints via SumatraPDF, reports honest states. Shop sees the queue, retry/reprint (with duplicate warning), reports and audit trail.
+## 5. Environment variables
 
-Subscription payments work the same way but target the **platform owner's UPI** and are verified by the Super Admin. Platform revenue and shop collections never mix.
-
-## 3. Windows Print Agent
-
-Source: `agent/` — plain Node.js 18+ (zero npm dependencies), prints via SumatraPDF.
-Setup, pairing, NSSM service install, printer mapping and troubleshooting:
-see **`agent/README.md`**.
-
-```bash
-node agent.js --pair ABCD1234     # one-time pairing (code from Shop Dashboard → Printers & devices)
-node agent.js                     # normal polling loop
-node agent.js --simulator         # test mode: no physical printing
+```
+DATABASE_URL=<sqlite file: URL for dev | Supabase pooler URL for prod>
+SESSION_SECRET=<openssl rand -hex 32>
+CRON_SECRET=<openssl rand -hex 16>
+SETUP_TOKEN=<openssl rand -hex 16>     # one-time /setup, delete after use if you prefer
+FILE_STORAGE_DIR=<abs path>            # dev/local backend only
+STORAGE_BACKEND=local|supabase
+SUPABASE_URL=<https://<ref>.supabase.co>          # supabase backend
+SUPABASE_SERVICE_ROLE_KEY=<service_role key>      # supabase backend
+SUPABASE_STORAGE_BUCKET=documents                 # supabase backend
+MAX_UPLOAD_MB=20
+BASE_URL=https://your-domain
+SUPER_ADMIN_EMAIL=…                     # dev seeding only
+SUPER_ADMIN_PASSWORD=…                  # dev seeding only
 ```
 
-Security: outbound-only HTTPS, device tokens stored as SHA-256, revocation is
-immediate, jobs are claimed atomically (no double-printing), a local state file
-prevents duplicate printing after a crash (unconfirmed jobs become FAILED for
-manual checking — never silently reprinted).
+## 6. Honest payment model
 
-**Honesty rule:** `COMPLETED` = spooler handed the job to the printer. It is not
-hardware-confirmed paper output; the shop confirms or reprints manually.
-
-## 4. Tests
-
-```bash
-bun test tests/          # 76 automated tests
-```
-
-- `tests/pricing.test.ts` — page ranges, duplex sheet math, server-side totals, UPI URI/VPA
-- `tests/auth.test.ts` — scrypt hashing, session tokens (tamper/expiry), file tokens, PDF validation
-- `tests/e2e.test.ts` — full HTTP integration: auth, provisioning, **tenant isolation**, ordering,
-  UTR dedup, verification amount checks, queue authorization, agent claim/download/status,
-  revocation, subscriptions (trial/expiry/lifetime), RBAC, rate limiting, audit trail
-- Manual/hardware tests (real printers, Windows spooler) are documented in `agent/README.md`
-- e2e creates only `test-e2e-*` tenants and purges them before & after each run
-
-## 5. Operations
-
-```bash
-bun scripts/backup.ts /path/to/backups   # SQLite online backup + private uploads archive (14-day retention)
-curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://YOUR-DOMAIN/api/cron/sweep
-# → expires stale payments/orders and overdue subscriptions (lifetime never expires)
-```
-
-Run the sweep on a schedule (cron every 5–15 min, or daily). Without it, expiry is
-still enforced lazily on dashboard/public reads.
-
-## 6. Environment variables
-
-| Variable | Purpose |
-|---|---|
-| `DATABASE_URL` | SQLite file path (pilot). PostgreSQL+RLS is the scale path. |
-| `SESSION_SECRET` | HMAC key for sessions & signed file links (`openssl rand -hex 32`) |
-| `CRON_SECRET` | protects `/api/cron/sweep`; also enables the dev-only rate-limit test bypass |
-| `FILE_STORAGE_DIR` | private upload root (never inside `public/`) |
-| `MAX_UPLOAD_MB` | per-file cap (default 20) |
-| `BASE_URL` | optional; fixes the domain used in shop QR codes |
-
-## 7. Key routes
-
-| Area | Paths |
-|---|---|
-| Customer | `/s/{slug}` · `/s/{slug}/status/{orderNumber}?code=…` |
-| Shop admin | `/shop` (+ orders, payments, pricing, printers, documents, reports, qr, subscription, settings) |
-| Super Admin | `/admin` (+ shops, payments, plans, settings, audit) |
-| Agent API | `POST /api/agent/pair` · `GET /api/agent/jobs` · `POST /api/agent/jobs/{id}/status` · `GET /api/agent/download/{docId}` |
-| Maintenance | `POST /api/cron/sweep` |
-
-## 8. Security model (summary)
-
-- Tenant scope **always** comes from the signed session or device token — never the browser.
-- One shared SQLite file for the pilot with strict service-layer scoping (every shop query
-  filters `shopId` from the session). Production PostgreSQL should add row-level security on `shopId`.
-- Private document storage; downloads only via 5–10 minute HMAC-signed links; Super Admin has
-  **no** API access to customer document contents.
-- Payments: no gateway, no UPI PIN/OTP collection, UTR uniqueness per payee account,
-  exact-amount confirmation, single verification, full audit trail.
-- Rate limiting on login/uploads/orders/UTR/agent endpoints (fixed window per IP).
-- scrypt password hashing, httpOnly SameSite cookies, Prisma parameterised queries.
-
-See `FINAL_REPORT.md` for the complete delivery report.
+A UPI QR only *requests* a payment and a submitted UTR only *claims* one — neither
+proves money arrived. Verification is manual by the receiving account owner
+(shop verifies print orders against its own bank app; the platform owner verifies
+subscription payments). Duplicate UTRs to the same payee are impossible (DB
+constraint + 409), amounts are enforced exactly, and every verification is
+audited. The payment state machine and records are reconciliation-shaped so a
+bank/PSP auto-verification API can be added later without redesign. No UPI PINs,
+OTPs or banking passwords are ever collected.
