@@ -142,7 +142,10 @@ export default async function Home() {
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
               {plans.map((p) => {
                 const lifetime = p.durationDays == null;
-                const features: string[] = (() => { try { return JSON.parse(p.features); } catch { return []; } })();
+                const features: string[] = (() => {
+                  if (!p.features) return [];
+                  try { return JSON.parse(p.features) as string[]; } catch { return []; }
+                })();
                 return (
                   <Card key={p.code} className={`flex flex-col ${p.code === "M6" ? "border-emerald-500 shadow-lg shadow-emerald-100 relative" : ""}`}>
                     {p.code === "M6" && (
