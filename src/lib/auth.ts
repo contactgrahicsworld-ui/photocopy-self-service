@@ -5,7 +5,22 @@
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
 
-const SECRET = process.env.SESSION_SECRET || "dev-only-secret-change-me";
+const DEV_FALLBACK_SECRET = "dev-only-secret-change-me";
+const SECRET = process.env.SESSION_SECRET || DEV_FALLBACK_SECRET;
+
+/**
+ * Fail closed: if the app runs in production with an unset/weak SESSION_SECRET,
+ * refuse to sign or verify sessions instead of silently accepting a known key.
+ * (Checked lazily so the build itself never crashes on missing env.)
+ */
+function assertProductionSecret(): void {
+  if (process.env.NODE_ENV === "production" && SECRET === DEV_FALLBACK_SECRET) {
+    throw new Error(
+      "SESSION_SECRET is not configured. Refusing to sign sessions with the development fallback. Set SESSION_SECRET (openssl rand -hex 32) in the deployment environment."
+    );
+  }
+}
+
 export const SESSION_COOKIE = "sp_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
@@ -45,6 +60,7 @@ function b64url(buf: Buffer | string): string {
 }
 
 function sign(data: string): string {
+  assertProductionSecret();
   return crypto.createHmac("sha256", SECRET).update(data).digest("base64url");
 }
 
@@ -56,6 +72,11 @@ export function createSessionToken(p: Omit<SessionPayload, "iat" | "exp">): stri
 
 export function verifySessionToken(token: string | undefined | null): SessionPayload | null {
   if (!token) return null;
+  try {
+    assertProductionSecret();
+  } catch {
+    return null;
+  }
   const dot = token.lastIndexOf(".");
   if (dot <= 0) return null;
   const body = token.slice(0, dot);

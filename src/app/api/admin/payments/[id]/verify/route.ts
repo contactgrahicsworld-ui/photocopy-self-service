@@ -15,7 +15,7 @@ export const POST = handler(async (req: NextRequest, { params }: { params: Promi
     verifierRole: "SUPER_ADMIN",
     verifierSessionShopId: null,
     verifierUserId: session.uid,
-    verifierName: session.name,
+    verifierName: session.name ?? undefined,
     amountConfirmedPaise: amountPaise,
     ip: getClientIp(req),
   });

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { verifyPassword, createSessionToken, SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth";
 import { handler, rateLimit, getClientIp, ApiError } from "@/lib/guards";
-import { audit } from "@/lib/audit";
+import { audit, type ActorType } from "@/lib/audit";
 
 export const POST = handler(async (req: NextRequest) => {
   rateLimit(req, "login", 10, 60_000);
@@ -26,7 +26,7 @@ export const POST = handler(async (req: NextRequest) => {
     email: user.email,
   });
   await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-  await audit({ actorType: user.role, actorId: user.id, actorLabel: user.name, shopId: user.shopId, action: "LOGIN_SUCCESS", ip: getClientIp(req) });
+  await audit({ actorType: user.role as ActorType, actorId: user.id, actorLabel: user.name, shopId: user.shopId, action: "LOGIN_SUCCESS", ip: getClientIp(req) });
 
   const res = NextResponse.json({
     ok: true,

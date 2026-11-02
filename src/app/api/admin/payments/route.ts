@@ -15,7 +15,7 @@ export const GET = handler(async (req: NextRequest) => {
     take: 100,
     include: { shop: { select: { name: true, slug: true } }, plan: { select: { code: true, name: true } } },
   });
-  const enriched = [];
+  const enriched: Array<(typeof payments)[number] & { qrDataUrl: string | null }> = [];
   for (const p of payments) {
     if (["PAYMENT_PENDING", "VERIFICATION_PENDING"].includes(p.status)) {
       enriched.push({ ...p, qrDataUrl: await upiQrDataUrl(p.upiUri) });

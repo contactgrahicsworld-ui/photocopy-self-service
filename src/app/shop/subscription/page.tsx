@@ -27,7 +27,7 @@ export default function ShopSubscription() {
   const { toast } = useToast();
 
   const load = useCallback(() => fetch("/api/shop/subscription").then(async (r) => setData(await r.json())), []);
-  useEffect(load, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   async function choosePlan(planId: string, planCode: string) {
     setBusy(true);

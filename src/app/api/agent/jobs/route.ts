@@ -26,7 +26,7 @@ export const GET = handler(async (req: NextRequest) => {
       idempotencyKey: j.idempotencyKey,
       orderId: j.orderId,
       orderNumber: j.orderItem.order.orderNumber,
-      fileName: j.document.originalName,
+      fileName: j.document?.originalName ?? "(document missing)",
       documentId: j.documentId,
       downloadPath: j.downloadPath,
       downloadTokenTtlSeconds: 600,

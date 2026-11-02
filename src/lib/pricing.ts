@@ -87,7 +87,7 @@ export function calcItem(item: ItemConfig, rules: PricingRuleInput[]): ItemCalcu
   if (!Number.isInteger(item.copies) || item.copies < 1 || item.copies > 500) {
     throw new Error("Copies must be between 1 and 500");
   }
-  if (item.duplex && item.duplexPricePerSidePaise == null && rule.duplexPricePerSidePaise == null) {
+  if (item.duplex && rule.duplexPricePerSidePaise == null) {
     // Duplex allowed at the same per-side rate if shop did not set a duplex rate.
   }
   const pages = parsePageRanges(item.pageSelection, item.pageCount);

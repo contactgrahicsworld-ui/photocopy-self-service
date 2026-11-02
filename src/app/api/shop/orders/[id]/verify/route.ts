@@ -15,9 +15,9 @@ export const POST = handler(async (req: NextRequest, { params }: { params: Promi
   const result = await verifyPayment({
     paymentId,
     verifierRole: "SHOP_ADMIN",
-    verifierSessionShopId: session.shopId,
+    verifierSessionShopId: session.shopId ?? null,
     verifierUserId: session.uid,
-    verifierName: session.name,
+    verifierName: session.name ?? undefined,
     amountConfirmedPaise: amountPaise,
     ip: getClientIp(req),
   });

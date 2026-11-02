@@ -1,78 +1,32 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
-node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+node_modules/
 
-# testing
-/coverage
+# project-local skills (never part of the product)
+skills/
 
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
-*.pem
-
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
-.vercel
-
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-local-*
-.claude
-.z-ai-config
-*.log
-dev.log
-dev.out.log
-test
-prompt
-
-server.log
-# Skills directory
-/skills/
-# deployment secrets (never commit)
-.secrets/
+# secrets & environment — NEVER commit
 .env
 .env.*
+!.env.example
+
+# databases & uploaded documents
+db/
+*.db
+*.db-journal
+db/uploads/
+uploads/
+
+# build output
+.next/
+out/
+dist/
+
+# logs
+*.log
 dev.log
 server.log
-db/
-node_modules/
-.next/
-.zscripts/
-download/
-upload/
-FINAL_REPORT.md
-agent/agent.state.json
-agent/agent.config.json
-*.log
 
-
-# env template must be committed
-!.env.example
-examples/
-.vercel/
-*.tsbuildinfo
-/dist/
+# OS / editor
+.DS_Store
+Thumbs.db
+tsconfig.tsbuildinfo

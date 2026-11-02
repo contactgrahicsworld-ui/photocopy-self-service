@@ -127,7 +127,11 @@ export async function claimJobsForDevice(deviceId: string, shopId: string, limit
     orderBy: { createdAt: "asc" },
     take: 20,
   });
-  const claimed = [];
+  const claimed: Array<
+    Prisma.PrintJobGetPayload<{
+      include: { orderItem: { include: { order: { select: { orderNumber: true; customerName: true } } } } };
+    }> & { document: Prisma.DocumentGetPayload<Record<string, never>> | null; downloadPath: string }
+  > = [];
   for (const job of queued) {
     if (claimed.length >= limit) break;
     // Atomic conditional update — only one agent can ever move QUEUED→DISPATCHED.

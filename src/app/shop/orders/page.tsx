@@ -19,7 +19,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 function OrdersInner() {
   const params = useSearchParams();
-  const [orders, setOrders] = useState<{ id: string; orderNumber: string; status: string; totalPaise: number; customerName?: string; customerPhone?: string; createdAt: string; itemCount: number; payment?: { utr?: string | null; status: string } | null } | null>(null);
+  const [orders, setOrders] = useState<Array<{ id: string; orderNumber: string; status: string; totalPaise: number; customerName?: string; customerPhone?: string; createdAt: string; itemCount: number; payment?: { utr?: string | null; status: string } | null }> | null>(null);
   const [status, setStatus] = useState(params.get("status") ?? "");
   const [loading, setLoading] = useState(true);
 

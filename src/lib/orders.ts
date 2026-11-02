@@ -60,7 +60,9 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
   const shop = await db.shop.findUnique({ where: { id: input.shopId } });
   if (!shop) throw new Error("Shop not found");
   if (shop.status !== "ACTIVE") throw new Error("This shop is not accepting orders right now");
-  if (!shop.upiId || !shop.upiPayeeName) throw new Error("This shop has not configured its payment details yet");
+  const shopUpiId = shop.upiId;
+  const shopUpiPayeeName = shop.upiPayeeName;
+  if (!shopUpiId || !shopUpiPayeeName) throw new Error("This shop has not configured its payment details yet");
 
   const rules = await db.pricingRule.findMany({ where: { shopId: input.shopId, active: true } });
   if (rules.length === 0) throw new Error("This shop has not configured pricing yet");
@@ -168,8 +170,8 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
 
     const reference = paymentReference("PMT");
     const upiUri = buildUpiUri({
-      payeeUpiId: shop.upiId,
-      payeeName: shop.upiPayeeName,
+      payeeUpiId: shopUpiId,
+      payeeName: shopUpiPayeeName,
       amountPaise: totals.totalPaise,
       reference,
       note: `${shop.name} ${orderNumber}`,
@@ -182,8 +184,8 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
         orderId: order.id,
         reference,
         amountPaise: totals.totalPaise,
-        payeeUpiId: shop.upiId,
-        payeeName: shop.upiPayeeName,
+        payeeUpiId: shopUpiId,
+        payeeName: shopUpiPayeeName,
         upiUri,
         status: "PAYMENT_PENDING",
         expiresAt: new Date(Date.now() + PAYMENT_WINDOW_MINUTES * 60000),
@@ -195,7 +197,7 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
         orderId: order.id,
         shopId: input.shopId,
         status: "PAYMENT_PENDING",
-        note: `Order created. Payable ₹${(totals.totalPaise / 100).toFixed(2)} via UPI to ${shop.upiId}`,
+        note: `Order created. Payable ₹${(totals.totalPaise / 100).toFixed(2)} via UPI to ${shopUpiId}`,
         actorType: "CUSTOMER",
       },
     });

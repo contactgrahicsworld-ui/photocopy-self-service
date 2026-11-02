@@ -18,7 +18,7 @@ export const POST = handler(async (req: NextRequest) => {
   const name = String(body?.name ?? "").trim();
   if (name.length < 2 || name.length > 80) throw new ApiError(400, "Printer name must be 2–80 characters (must match the Windows printer name)");
   const colorMode = ["BW", "COLOR", "ANY"].includes(body?.colorMode) ? body.colorMode : "BW";
-  const paperSizes = Array.isArray(body?.paperSizes) ? body.paperSizes.filter((s: string) => PAPER_SIZES.includes(s)) : [];
+  const paperSizes = Array.isArray(body?.paperSizes) ? body.paperSizes.filter((s: string) => (PAPER_SIZES as readonly string[]).includes(s)) : [];
   if (paperSizes.length === 0) throw new ApiError(400, "Select at least one supported paper size");
 
   const limits = await getShopLimits(session.shopId);

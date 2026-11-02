@@ -24,7 +24,7 @@ export default function AdminPlans() {
   const [form, setForm] = useState({ code: "", name: "", priceRupees: "", durationDays: "", printerLimit: "", storageLimitMb: "", monthlyOrderLimit: "" });
 
   const load = useCallback(() => fetch("/api/admin/plans").then(async (r) => setPlans((await r.json()).plans)), []);
-  useEffect(load, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   async function save(p: Partial<Plan>) {
     const res = await fetch(`/api/admin/plans/${p.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
