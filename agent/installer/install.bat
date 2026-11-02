@@ -18,9 +18,27 @@ if %errorlevel% neq 0 (
 echo [1/6] Install folder: %INSTALLDIR%
 if not exist "%INSTALLDIR%" mkdir "%INSTALLDIR%" || (echo [X] Cannot create folder & pause & exit /b 1)
 
-:: -- 2. Copy agent ----------------------------------------------
-echo [2/6] Copying agent...
-copy /y "%~dp0SmartPhotocopyAgent.exe" "%INSTALLDIR%\SmartPhotocopyAgent.exe" >nul || (echo [X] Copy failed - run this .bat from the extracted folder & pause & exit /b 1)
+:: -- 2. Install agent (exe OR Node.js fallback) -----------------
+echo [2/6] Installing agent...
+set "AGENTCMD=%INSTALLDIR%\SmartPhotocopyAgent.exe"
+if exist "%~dp0SmartPhotocopyAgent.exe" (
+    copy /y "%~dp0SmartPhotocopyAgent.exe" "%INSTALLDIR%\SmartPhotocopyAgent.exe" >nul || (echo [X] Copy failed - run this .bat from the extracted folder & pause & exit /b 1)
+) else if exist "%~dp0agent.js" (
+    echo       Standalone exe not bundled - running agent.js with Node.js.
+    copy /y "%~dp0agent.js" "%INSTALLDIR%\agent.js" >nul || (echo [X] Copy failed & pause & exit /b 1)
+    where node >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo       Node.js not found - installing it for you (one time, ~30 MB)...
+        winget install OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements >nul 2>&1
+        where node >nul 2>&1
+        if !errorlevel! neq 0 (
+            echo [X] Could not install Node.js automatically. Install it from https://nodejs.org then run install.bat again. & pause & exit /b 1
+        )
+    )
+    set "AGENTCMD=node "%INSTALLDIR%\agent.js""
+) else (
+    echo [X] Neither SmartPhotocopyAgent.exe nor agent.js found next to install.bat & pause & exit /b 1
+)
 
 :: -- 3. SumatraPDF (printing engine) ----------------------------
 echo [3/6] Setting up SumatraPDF (printing engine)...
@@ -53,19 +71,19 @@ if "%PAIRCODE%"=="" (
     echo       Get a pairing code: Shop Dashboard - Printers and devices - Add device
     set /p PAIRCODE="      Paste the pairing code here: "
 )
-if "%PAIRCODE%"=="" (echo [X] No pairing code entered. Run install.bat again or: SmartPhotocopyAgent.exe --pair CODE & pause & exit /b 1)
+if "%PAIRCODE%"=="" (echo [X] No pairing code entered. Run install.bat again & pause & exit /b 1)
 cd /d "%INSTALLDIR%"
-SmartPhotocopyAgent.exe --pair %PAIRCODE%
+%AGENTCMD% --pair %PAIRCODE%
 if %errorlevel% neq 0 (echo [X] Pairing failed. Check the code and your internet. & pause & exit /b 1)
 
 :: -- 5. Auto-start ----------------------------------------------
 echo [5/6] Setting up auto-start at logon...
-schtasks /Create /F /SC ONLOGON /TN "SmartPhotocopyAgent" /TR "\"%INSTALLDIR%\SmartPhotocopyAgent.exe\"" >nul 2>&1
+schtasks /Create /F /SC ONLOGON /TN "SmartPhotocopyAgent" /TR "%AGENTCMD%" >nul 2>&1
 if %errorlevel% equ 0 (echo       Scheduled task created.) else (echo [!] Could not create scheduled task - start the agent manually after reboot.)
 
 :: -- 6. Start ---------------------------------------------------
 echo [6/6] Starting agent...
-start "" "%INSTALLDIR%\SmartPhotocopyAgent.exe"
+start "" %AGENTCMD%
 echo.
 echo ============================================================
 echo    DONE! The agent is running.

@@ -16,6 +16,12 @@
 2. The agent installs to `C:\Program Files\Smart Photocopy Agent` (or your user folder if no admin), auto-starts at logon, and polls for authorized jobs over outbound HTTPS only.
 3. Print engine: SumatraPDF (auto-downloaded; manual fallback link above).
 
+## Standalone exe kya nahi mila? (No .exe needed)
+
+Zip me `.exe` na ho to bhi installer chalega — wo khud **agent.js + Node.js** use karega
+(Node.js automatically install ho jayega via winget, ya https://nodejs.org se pehle install kar lo).
+Dono modes me pairing, printing, auto-start bilkul same hai.
+
 ## Manual run (advanced)
 
 ```
